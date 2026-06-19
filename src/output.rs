@@ -1,6 +1,8 @@
 use std::env;
 use std::io::{self, IsTerminal, Write};
 
+use serde::Serialize;
+
 use crate::status::StatusSnapshot;
 
 pub struct CommandResult<'a> {
@@ -35,10 +37,11 @@ impl Renderer {
 
     pub fn error(&self, message: &str) {
         if self.json {
-            println!(
-                "{{\"ok\":false,\"exit_code\":1,\"error\":{}}}",
-                json_string(message)
-            );
+            print_json(&ErrorJson {
+                ok: false,
+                exit_code: 1,
+                error: message,
+            });
         } else {
             eprintln!("fox: {message}");
         }
@@ -52,15 +55,14 @@ impl Renderer {
 
     pub fn command_response(&self, result: CommandResult<'_>) {
         if self.json {
-            println!(
-                "{{\"ok\":{},\"exit_code\":{},\"command\":{},\"message\":{},\"stdout\":{},\"lines\":{}}}",
-                result.exit_code == 0,
-                result.exit_code,
-                json_string(result.command),
-                json_option(result.json_note),
-                json_string(result.stdout),
-                json_lines(result.stdout),
-            );
+            print_json(&CommandJson {
+                ok: result.exit_code == 0,
+                exit_code: result.exit_code,
+                command: result.command,
+                message: result.json_note,
+                stdout: result.stdout,
+                lines: result.stdout.lines().collect(),
+            });
         } else if !result.streamed {
             self.render_plain_command(result);
         }
@@ -68,10 +70,12 @@ impl Renderer {
 
     pub fn decrypt_help(&self, help: &str) {
         if self.json {
-            println!(
-                "{{\"ok\":true,\"exit_code\":0,\"command\":\"decrypt\",\"help\":{}}}",
-                json_string(help)
-            );
+            print_json(&DecryptHelpJson {
+                ok: true,
+                exit_code: 0,
+                command: "decrypt",
+                help,
+            });
             return;
         }
         println!("{}", self.paint(Color::Yellow, "fox decrypt"));
@@ -158,24 +162,13 @@ impl Renderer {
     }
 
     fn start_page_json(&self, status: &StatusSnapshot, exit_code: i32) {
-        print!(
-            "{{\"ok\":{},\"exit_code\":{},\"command\":\"status\",\"status\":{{",
-            exit_code == 0,
-            exit_code
-        );
-        for (idx, (key, value)) in status.raw.iter().enumerate() {
-            if idx > 0 {
-                print!(",");
-            }
-            if StatusSnapshot::is_bool_key(key) {
-                print!("{}:{}", json_string(key), value == "1");
-            } else {
-                print!("{}:{}", json_string(key), json_string(value));
-            }
-        }
-        print!("}},\"commands\":");
-        json_commands();
-        println!("}}");
+        print_json(&StatusJson {
+            ok: exit_code == 0,
+            exit_code,
+            command: "status",
+            status,
+            commands: COMMANDS,
+        });
     }
 
     fn render_plain_command(&self, result: CommandResult<'_>) {
@@ -239,8 +232,10 @@ enum Color {
 /// `name` is the canonical command (matching `args::Command::display_name`, or
 /// a non-command pseudo-entry like `fox`/`--json`); the drift test in args.rs
 /// asserts every command variant appears here.
+#[derive(Serialize)]
 pub struct CommandInfo {
     pub name: &'static str,
+    #[serde(rename = "command")]
     pub usage: &'static str,
     pub summary: &'static str,
 }
@@ -264,6 +259,7 @@ const COMMANDS: &[CommandInfo] = &[
 ];
 
 /// Canonical command names in the help catalog (used by the args.rs drift test).
+#[cfg(test)]
 pub fn command_names() -> impl Iterator<Item = &'static str> {
     COMMANDS.iter().map(|info| info.name)
 }
@@ -276,53 +272,45 @@ fn empty_dash(value: &str) -> &str {
     }
 }
 
-fn json_option(value: Option<&str>) -> String {
-    value.map(json_string).unwrap_or_else(|| "null".to_string())
+/// Serialize `payload` to a single line of JSON on stdout. Serialization of
+/// these plain data structures cannot fail, so a failure is a programmer error.
+fn print_json<T: Serialize>(payload: &T) {
+    match serde_json::to_string(payload) {
+        Ok(json) => println!("{json}"),
+        Err(err) => eprintln!("fox: failed to encode JSON: {err}"),
+    }
 }
 
-fn json_lines(value: &str) -> String {
-    let mut out = String::from("[");
-    for (idx, line) in value.lines().enumerate() {
-        if idx > 0 {
-            out.push(',');
-        }
-        out.push_str(&json_string(line));
-    }
-    out.push(']');
-    out
+#[derive(Serialize)]
+struct ErrorJson<'a> {
+    ok: bool,
+    exit_code: i32,
+    error: &'a str,
 }
 
-fn json_commands() {
-    print!("[");
-    for (idx, info) in COMMANDS.iter().enumerate() {
-        if idx > 0 {
-            print!(",");
-        }
-        print!(
-            "{{\"name\":{},\"command\":{},\"summary\":{}}}",
-            json_string(info.name),
-            json_string(info.usage),
-            json_string(info.summary)
-        );
-    }
-    print!("]");
+#[derive(Serialize)]
+struct CommandJson<'a> {
+    ok: bool,
+    exit_code: i32,
+    command: &'a str,
+    message: Option<&'a str>,
+    stdout: &'a str,
+    lines: Vec<&'a str>,
 }
 
-fn json_string(value: &str) -> String {
-    let mut out = String::from("\"");
-    for ch in value.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{08}' => out.push_str("\\b"),
-            '\u{0c}' => out.push_str("\\f"),
-            ch if ch < '\u{20}' => out.push_str(&format!("\\u{:04x}", ch as u32)),
-            ch => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
+#[derive(Serialize)]
+struct DecryptHelpJson<'a> {
+    ok: bool,
+    exit_code: i32,
+    command: &'a str,
+    help: &'a str,
+}
+
+#[derive(Serialize)]
+struct StatusJson<'a> {
+    ok: bool,
+    exit_code: i32,
+    command: &'a str,
+    status: &'a StatusSnapshot,
+    commands: &'a [CommandInfo],
 }

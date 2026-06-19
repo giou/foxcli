@@ -18,7 +18,19 @@ rust_binary {
     edition: "2021",
     recovery: true,
     prefer_rlib: true,
+    // Optimize for size. The platform defaults to "-C opt-level=3"; override it
+    // for this front-end where binary size matters more than throughput.
+    // panic=abort and thin LTO are already applied by the device defaults.
+    flags: [
+        "-C opt-level=z",
+        "-C codegen-units=1",
+    ],
     rustlibs: [
         "libclap",
+        "libserde",
+        "libserde_json",
+    ],
+    proc_macros: [
+        "libserde_derive",
     ],
 }

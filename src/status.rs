@@ -1,4 +1,6 @@
-#[derive(Default)]
+use serde::Serialize;
+
+#[derive(Default, Serialize)]
 pub struct StatusSnapshot {
     pub release: String,
     pub recovery_version: String,
@@ -22,7 +24,6 @@ pub struct StatusSnapshot {
     pub android_release: String,
     pub rom_miui: bool,
     pub fingerprint: String,
-    pub raw: Vec<(String, String)>,
 }
 
 impl StatusSnapshot {
@@ -45,23 +46,9 @@ impl StatusSnapshot {
                 continue;
             };
             out.set(key, value);
-            out.raw.push((key.to_string(), value.to_string()));
         }
 
         out
-    }
-
-    /// Keys whose raw "0"/"1" value represents a boolean. Kept next to `set`
-    /// so the two stay in sync; the JSON renderer uses it to emit real bools.
-    pub fn is_bool_key(key: &str) -> bool {
-        matches!(
-            key,
-            "storage_encrypted"
-                | "storage_decrypted"
-                | "dynamic_partitions"
-                | "virtual_ab"
-                | "rom_miui"
-        )
     }
 
     fn set(&mut self, key: &str, value: &str) {
