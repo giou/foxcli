@@ -1,0 +1,23 @@
+diff --git a/crates/clap_lex/Android.bp b/crates/clap_lex/Android.bp
+index 6e7c7505..00fb4fd2 100644
+--- a/crates/clap_lex/Android.bp
++++ b/crates/clap_lex/Android.bp
+@@ -27,5 +27,6 @@ rust_library {
+     ],
+     product_available: true,
+     vendor_available: true,
++    recovery_available: true,
+     min_sdk_version: "29",
+ }
+diff --git a/crates/clap_lex/cargo_embargo.json b/crates/clap_lex/cargo_embargo.json
+index 139b3012..99d5110e 100644
+--- a/crates/clap_lex/cargo_embargo.json
++++ b/crates/clap_lex/cargo_embargo.json
+@@ -3,6 +3,7 @@
+     "//apex_available:anyapex",
+     "//apex_available:platform"
+   ],
++  "recovery_available": true,
+   "min_sdk_version": "29",
+   "tests": true
+ }

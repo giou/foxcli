@@ -1,0 +1,22 @@
+diff --git a/crates/clap_builder/Android.bp b/crates/clap_builder/Android.bp
+index 8b0da08e..8d5b7ef0 100644
+--- a/crates/clap_builder/Android.bp
++++ b/crates/clap_builder/Android.bp
+@@ -39,5 +39,6 @@ rust_library {
+     ],
+     product_available: true,
+     vendor_available: true,
++    recovery_available: true,
+     min_sdk_version: "29",
+ }
+diff --git a/crates/clap_builder/cargo_embargo.json b/crates/clap_builder/cargo_embargo.json
+index 46ea203a..94000bfa 100644
+--- a/crates/clap_builder/cargo_embargo.json
++++ b/crates/clap_builder/cargo_embargo.json
+@@ -6,5 +6,6 @@
+     "error-context",
+     "suggestions"
+   ],
++  "recovery_available": true,
+   "min_sdk_version": "29"
+ }

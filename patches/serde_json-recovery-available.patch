@@ -1,0 +1,23 @@
+diff --git a/crates/serde_json/Android.bp b/crates/serde_json/Android.bp
+index 0d151d78..522ab46b 100644
+--- a/crates/serde_json/Android.bp
++++ b/crates/serde_json/Android.bp
+@@ -38,6 +38,7 @@ rust_library {
+         "com.android.virt",
+     ],
+     product_available: true,
++    recovery_available: true,
+     vendor_available: true,
+     min_sdk_version: "29",
+ }
+diff --git a/crates/serde_json/cargo_embargo.json b/crates/serde_json/cargo_embargo.json
+index c3670968..2cb6287e 100644
+--- a/crates/serde_json/cargo_embargo.json
++++ b/crates/serde_json/cargo_embargo.json
+@@ -4,5 +4,6 @@
+     "com.android.uprobestats",
+     "com.android.virt"
+   ],
++  "recovery_available": true,
+   "min_sdk_version": "29"
+ }

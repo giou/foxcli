@@ -1,0 +1,23 @@
+diff --git a/crates/memchr/Android.bp b/crates/memchr/Android.bp
+index 771632f9..9a93c9cc 100644
+--- a/crates/memchr/Android.bp
++++ b/crates/memchr/Android.bp
+@@ -31,6 +31,7 @@ rust_library {
+         "//apex_available:anyapex",
+     ],
+     product_available: true,
++    recovery_available: true,
+     vendor_available: true,
+     min_sdk_version: "29",
+ }
+diff --git a/crates/memchr/cargo_embargo.json b/crates/memchr/cargo_embargo.json
+index dc90992d..c8bc9b48 100644
+--- a/crates/memchr/cargo_embargo.json
++++ b/crates/memchr/cargo_embargo.json
+@@ -4,5 +4,6 @@
+     "//apex_available:platform",
+     "//apex_available:anyapex"
+   ],
++  "recovery_available": true,
+   "min_sdk_version": "29"
+ }

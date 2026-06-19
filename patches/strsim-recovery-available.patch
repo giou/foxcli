@@ -1,0 +1,23 @@
+diff --git a/crates/strsim/Android.bp b/crates/strsim/Android.bp
+index 61eaad7f..262d8509 100644
+--- a/crates/strsim/Android.bp
++++ b/crates/strsim/Android.bp
+@@ -27,6 +27,7 @@ rust_library {
+     ],
+     product_available: true,
+     vendor_available: true,
++    recovery_available: true,
+     min_sdk_version: "29",
+ }
+ 
+diff --git a/crates/strsim/cargo_embargo.json b/crates/strsim/cargo_embargo.json
+index 488ab2e9..6ca5580c 100644
+--- a/crates/strsim/cargo_embargo.json
++++ b/crates/strsim/cargo_embargo.json
+@@ -1,5 +1,6 @@
+ {
+   "run_cargo": false,
+   "tests": true,
++  "recovery_available": true,
+   "min_sdk_version": "29"
+ }

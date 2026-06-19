@@ -1,0 +1,23 @@
+diff --git a/crates/itoa/Android.bp b/crates/itoa/Android.bp
+index 86de2c4e..78f79fae 100644
+--- a/crates/itoa/Android.bp
++++ b/crates/itoa/Android.bp
+@@ -44,6 +44,7 @@ rust_library {
+         "com.sdv.*",
+     ],
+     product_available: true,
++    recovery_available: true,
+     vendor_available: true,
+     min_sdk_version: "29",
+ }
+diff --git a/crates/itoa/cargo_embargo.json b/crates/itoa/cargo_embargo.json
+index 299050c0..f337f309 100644
+--- a/crates/itoa/cargo_embargo.json
++++ b/crates/itoa/cargo_embargo.json
+@@ -6,5 +6,6 @@
+     "com.sdv.*"
+   ],
+   "tests": true,
++  "recovery_available": true,
+   "min_sdk_version": "29"
+ }

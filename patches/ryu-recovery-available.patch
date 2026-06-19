@@ -1,0 +1,23 @@
+diff --git a/crates/ryu/Android.bp b/crates/ryu/Android.bp
+index ea65f0e9..e9267190 100644
+--- a/crates/ryu/Android.bp
++++ b/crates/ryu/Android.bp
+@@ -27,6 +27,7 @@ rust_library {
+         "com.android.virt",
+     ],
+     product_available: true,
++    recovery_available: true,
+     vendor_available: true,
+     min_sdk_version: "29",
+ }
+diff --git a/crates/ryu/cargo_embargo.json b/crates/ryu/cargo_embargo.json
+index f940a1fb..57de3f8a 100644
+--- a/crates/ryu/cargo_embargo.json
++++ b/crates/ryu/cargo_embargo.json
+@@ -5,5 +5,6 @@
+     "com.android.virt"
+   ],
+   "tests": true,
++  "recovery_available": true,
+   "min_sdk_version": "29"
+ }
