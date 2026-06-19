@@ -1,0 +1,24 @@
+package {
+    default_applicable_licenses: ["external_foxcli_license"],
+}
+
+license {
+    name: "external_foxcli_license",
+    visibility: [":__subpackages__"],
+    license_kinds: ["SPDX-license-identifier-GPL-3.0"],
+}
+
+rust_binary {
+    name: "foxcli",
+    crate_name: "foxcli",
+    cargo_env_compat: true,
+    cargo_pkg_version: "0.1.0",
+    stem: "fox",
+    srcs: ["src/main.rs"],
+    edition: "2021",
+    recovery: true,
+    prefer_rlib: true,
+    rustlibs: [
+        "libclap",
+    ],
+}
