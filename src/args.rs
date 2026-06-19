@@ -35,6 +35,7 @@ pub enum Command {
     Partition(Partition),
     Addons(Addons),
     Storages(Storages),
+    Fifo(Fifo),
     Ors(Script),
     #[command(name = "ors-cmd")]
     OrsCmd(Raw),
@@ -59,6 +60,7 @@ pub enum CommandPage {
     Log,
     Reflash,
     Storages,
+    Fifo,
     Internal,
     Ors,
     OrsCmd,
@@ -86,6 +88,7 @@ impl Command {
             Command::Partition(_) => "partition",
             Command::Addons(_) => "addons",
             Command::Storages(_) => "storages",
+            Command::Fifo(_) => "fifo",
             Command::Ors(_) => "ors",
             Command::OrsCmd(_) => "ors-cmd",
         }
@@ -145,6 +148,7 @@ impl Command {
             Command::Log(log) if log.action.is_none() => Some(CommandPage::Log),
             Command::Reflash(reflash) if reflash.action.is_none() => Some(CommandPage::Reflash),
             Command::Storages(_) => Some(CommandPage::Storages),
+            Command::Fifo(fifo) if fifo.command.is_none() => Some(CommandPage::Fifo),
             Command::Internal(internal) if internal.command.is_none() => {
                 Some(CommandPage::Internal)
             }
@@ -264,6 +268,7 @@ impl Command {
                 out
             }
             Command::Storages(_) => vec!["storages".to_string()],
+            Command::Fifo(fifo) => flatten_fifo(fifo.command),
             Command::Ors(script) => prepend("ors", script.script_file.into_iter().collect()),
             Command::OrsCmd(raw) => prepend("ors-cmd", raw.raw),
         }
@@ -373,6 +378,24 @@ pub struct Log {
 
 #[derive(Args)]
 pub struct Storages {}
+
+#[derive(Args)]
+pub struct Fifo {
+    #[command(subcommand)]
+    command: Option<FifoCommand>,
+}
+
+#[derive(Subcommand)]
+enum FifoCommand {
+    /// Send a raw argv vector to foxin and print foxout.
+    Send(FifoSend),
+}
+
+#[derive(Args)]
+struct FifoSend {
+    #[arg(required = true, allow_hyphen_values = true, trailing_var_arg = true)]
+    raw: Vec<String>,
+}
 
 #[derive(Clone, Copy, clap::ValueEnum)]
 pub enum MtpAction {
@@ -541,6 +564,13 @@ fn flatten_mtp(action: Option<MtpAction>) -> Vec<String> {
     out
 }
 
+fn flatten_fifo(command: Option<FifoCommand>) -> Vec<String> {
+    match command {
+        None => vec![],
+        Some(FifoCommand::Send(send)) => send.raw,
+    }
+}
+
 fn flatten_internal(command: Option<InternalCommand>) -> Vec<String> {
     match command {
         None => vec!["internal".to_string()],
@@ -631,6 +661,11 @@ mod tests {
                 names: vec![],
             }),
             Command::Storages(Storages {}),
+            Command::Fifo(Fifo {
+                command: Some(FifoCommand::Send(FifoSend {
+                    raw: vec!["status".to_string()],
+                })),
+            }),
             Command::Ors(Script {
                 script_file: Some(String::new()),
             }),
@@ -659,6 +694,7 @@ mod tests {
                 | Command::Partition(_)
                 | Command::Addons(_)
                 | Command::Storages(_)
+                | Command::Fifo(_)
                 | Command::Ors(_)
                 | Command::OrsCmd(_) => {}
             }

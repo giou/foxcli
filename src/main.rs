@@ -94,6 +94,7 @@ fn show_command_page(page: CommandPage, renderer: &Renderer) -> std::io::Result<
         | CommandPage::FormatData
         | CommandPage::Log
         | CommandPage::Reflash
+        | CommandPage::Fifo
         | CommandPage::Internal
         | CommandPage::Ors
         | CommandPage::OrsCmd => None,

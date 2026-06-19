@@ -736,6 +736,13 @@ const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         group: "Misc",
+        name: "fifo",
+        usage: "fox fifo send <argv...>",
+        summary: "send a raw argv vector to foxin and print foxout",
+        examples: &[],
+    },
+    CommandInfo {
+        group: "Misc",
         name: "internal",
         usage: "fox internal <get|set|go>",
         summary: "read or update recovery internals",
@@ -1139,6 +1146,18 @@ const STORAGES_COMMANDS: &[CommandInfo] = &[
     },
 ];
 
+const FIFO_COMMANDS: &[CommandInfo] = &[CommandInfo {
+    group: "FIFO",
+    name: "send",
+    usage: "fox fifo send <argv...>",
+    summary: "send raw argv directly to foxin and print foxout",
+    examples: &[
+        "fox fifo send status",
+        "fox fifo send mount /vendor",
+        "fox fifo send flash /sdcard/rom.zip --no-verify",
+    ],
+}];
+
 const INTERNAL_COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         group: "Internal",
@@ -1200,6 +1219,7 @@ fn page_commands(page: CommandPage) -> &'static [CommandInfo] {
         CommandPage::Log => LOG_COMMANDS,
         CommandPage::Reflash => REFLASH_COMMANDS,
         CommandPage::Storages => STORAGES_COMMANDS,
+        CommandPage::Fifo => FIFO_COMMANDS,
         CommandPage::Internal => INTERNAL_COMMANDS,
         CommandPage::Ors => ORS_COMMANDS,
         CommandPage::OrsCmd => ORS_CMD_COMMANDS,
@@ -1225,6 +1245,7 @@ fn page_name(page: CommandPage) -> &'static str {
         CommandPage::Log => "log",
         CommandPage::Reflash => "reflash",
         CommandPage::Storages => "storages",
+        CommandPage::Fifo => "fifo",
         CommandPage::Internal => "internal",
         CommandPage::Ors => "ors",
         CommandPage::OrsCmd => "ors-cmd",
@@ -1250,6 +1271,7 @@ fn page_title(page: CommandPage) -> &'static str {
         CommandPage::Log => "[Log]",
         CommandPage::Reflash => "[Reflash]",
         CommandPage::Storages => "[Storages]",
+        CommandPage::Fifo => "[FIFO]",
         CommandPage::Internal => "[Internal]",
         CommandPage::Ors => "[OpenRecoveryScript]",
         CommandPage::OrsCmd => "[OpenRecoveryScript Command]",
@@ -1275,6 +1297,7 @@ fn page_summary(page: CommandPage) -> &'static str {
         CommandPage::Log => "Save recovery logs when you explicitly ask for it.",
         CommandPage::Reflash => "Reflash the currently installed OrangeFox when you explicitly ask for it.",
         CommandPage::Storages => "List storage destinations that can be used with backup --storage.",
+        CommandPage::Fifo => "Send a raw argv vector through foxin and stream foxout without typed foxcli parsing.",
         CommandPage::Internal => "Read or change recovery internals. This is mainly for scripts and debugging.",
         CommandPage::Ors => "Run an OpenRecoveryScript file through the recovery engine.",
         CommandPage::OrsCmd => "Run one raw OpenRecoveryScript command through the recovery engine.",
