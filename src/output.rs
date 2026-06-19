@@ -7,7 +7,9 @@ pub struct CommandResult<'a> {
     pub command: &'a str,
     pub exit_code: i32,
     pub stdout: &'a str,
-    pub message: Option<&'a str>,
+    /// Surfaced only in JSON output. In plain mode any such notice is printed
+    /// by the caller before the engine streams (see `sideload_notice`).
+    pub json_note: Option<&'a str>,
     pub streamed: bool,
 }
 
@@ -55,7 +57,7 @@ impl Renderer {
                 result.exit_code == 0,
                 result.exit_code,
                 json_string(result.command),
-                json_option(result.message),
+                json_option(result.json_note),
                 json_string(result.stdout),
                 json_lines(result.stdout),
             );
@@ -82,7 +84,13 @@ impl Renderer {
             return;
         }
 
-        println!("{}", self.paint(Color::Orange, "OrangeFox Recovery"));
+        println!("{}", self.paint(Color::Orange, "[OrangeFox Recovery]"));
+        if exit_code != 0 {
+            println!(
+                "{} status command returned a non-zero exit code ({exit_code}); data may be incomplete.",
+                self.paint(Color::Yellow, "!")
+            );
+        }
         println!(
             "{} {}  {} {}  {} {}",
             self.label("Release"),
@@ -112,7 +120,7 @@ impl Renderer {
         );
 
         println!();
-        println!("{}", self.paint(Color::Cyan, "Device"));
+        println!("{}", self.paint(Color::Cyan, "[Device]"));
         self.row("Model", &status.device_model);
         self.row("Code name", &status.device_code);
         self.row("Boot slot", &status.boot_slot);
@@ -121,7 +129,7 @@ impl Renderer {
         self.row("Kernel", &status.kernel);
 
         println!();
-        println!("{}", self.paint(Color::Cyan, "Storage"));
+        println!("{}", self.paint(Color::Cyan, "[Storage]"));
         if status.storage_encrypted {
             self.row("Encryption", "encrypted");
             self.row_bool("Decrypted", status.storage_decrypted);
@@ -137,7 +145,7 @@ impl Renderer {
         }
 
         println!();
-        println!("{}", self.paint(Color::Cyan, "Installed ROM"));
+        println!("{}", self.paint(Color::Cyan, "[Installed ROM]"));
         self.row("Name", &status.rom_name);
         self.row("Incremental", &status.rom_incremental);
         self.row("Android", &status.android_release);
@@ -159,14 +167,7 @@ impl Renderer {
             if idx > 0 {
                 print!(",");
             }
-            if matches!(
-                key.as_str(),
-                "storage_encrypted"
-                    | "storage_decrypted"
-                    | "dynamic_partitions"
-                    | "virtual_ab"
-                    | "rom_miui"
-            ) {
+            if StatusSnapshot::is_bool_key(key) {
                 print!("{}:{}", json_string(key), value == "1");
             } else {
                 print!("{}:{}", json_string(key), json_string(value));
@@ -204,9 +205,9 @@ impl Renderer {
     }
 
     fn commands(&self) {
-        println!("{}", self.paint(Color::Cyan, "Commands"));
-        for (command, summary) in COMMANDS {
-            println!("  {} {}", self.paint(Color::Green, command), summary);
+        println!("{}", self.paint(Color::Cyan, "[Commands]"));
+        for info in COMMANDS {
+            println!("  {} {}", self.paint(Color::Green, info.usage), info.summary);
         }
     }
 
@@ -233,32 +234,39 @@ enum Color {
     Dim,
 }
 
-const COMMANDS: &[(&str, &str)] = &[
-    ("fox", "show device status and this command list"),
-    ("fox status", "show device status"),
-    ("fox mount <path...>", "mount one or more partitions"),
-    ("fox unmount <path...>", "unmount one or more partitions"),
-    ("fox flash <zip> [--no-verify]", "flash a zip"),
-    ("fox backup <part...>", "create a backup"),
-    ("fox restore --name <backup> [part...]", "restore a backup"),
-    (
-        "fox decrypt [password] [--user <id>]",
-        "decrypt storage or show pattern help",
-    ),
-    ("fox sideload", "start adb sideload mode"),
-    ("fox wlan <subcommand>", "manage WLAN"),
-    ("fox reboot [target]", "reboot to a target"),
-    (
-        "fox internal <get|set|go>",
-        "read or update recovery internals",
-    ),
-    ("fox ors <file>", "run an OpenRecoveryScript file"),
-    (
-        "fox ors-cmd <command...>",
-        "run one raw OpenRecoveryScript command",
-    ),
-    ("fox --json <command>", "return machine-readable JSON"),
+/// A single row of the `fox` help listing.
+///
+/// `name` is the canonical command (matching `args::Command::display_name`, or
+/// a non-command pseudo-entry like `fox`/`--json`); the drift test in args.rs
+/// asserts every command variant appears here.
+pub struct CommandInfo {
+    pub name: &'static str,
+    pub usage: &'static str,
+    pub summary: &'static str,
+}
+
+const COMMANDS: &[CommandInfo] = &[
+    CommandInfo { name: "fox", usage: "fox", summary: "show device status and this command list" },
+    CommandInfo { name: "status", usage: "fox status", summary: "show device status" },
+    CommandInfo { name: "mount", usage: "fox mount <path...>", summary: "mount one or more partitions" },
+    CommandInfo { name: "unmount", usage: "fox unmount <path...>", summary: "unmount one or more partitions" },
+    CommandInfo { name: "flash", usage: "fox flash <zip> [--no-verify]", summary: "flash a zip" },
+    CommandInfo { name: "backup", usage: "fox backup <part...>", summary: "create a backup" },
+    CommandInfo { name: "restore", usage: "fox restore --name <backup> [part...]", summary: "restore a backup" },
+    CommandInfo { name: "decrypt", usage: "fox decrypt [password] [--user <id>]", summary: "decrypt storage or show pattern help" },
+    CommandInfo { name: "sideload", usage: "fox sideload", summary: "start adb sideload mode" },
+    CommandInfo { name: "wlan", usage: "fox wlan <subcommand>", summary: "manage WLAN" },
+    CommandInfo { name: "reboot", usage: "fox reboot [target]", summary: "reboot to a target" },
+    CommandInfo { name: "internal", usage: "fox internal <get|set|go>", summary: "read or update recovery internals" },
+    CommandInfo { name: "ors", usage: "fox ors <file>", summary: "run an OpenRecoveryScript file" },
+    CommandInfo { name: "ors-cmd", usage: "fox ors-cmd <command...>", summary: "run one raw OpenRecoveryScript command" },
+    CommandInfo { name: "--json", usage: "fox --json <command>", summary: "return machine-readable JSON" },
 ];
+
+/// Canonical command names in the help catalog (used by the args.rs drift test).
+pub fn command_names() -> impl Iterator<Item = &'static str> {
+    COMMANDS.iter().map(|info| info.name)
+}
 
 fn empty_dash(value: &str) -> &str {
     if value.is_empty() {
@@ -286,14 +294,15 @@ fn json_lines(value: &str) -> String {
 
 fn json_commands() {
     print!("[");
-    for (idx, (command, summary)) in COMMANDS.iter().enumerate() {
+    for (idx, info) in COMMANDS.iter().enumerate() {
         if idx > 0 {
             print!(",");
         }
         print!(
-            "{{\"command\":{},\"summary\":{}}}",
-            json_string(command),
-            json_string(summary)
+            "{{\"name\":{},\"command\":{},\"summary\":{}}}",
+            json_string(info.name),
+            json_string(info.usage),
+            json_string(info.summary)
         );
     }
     print!("]");

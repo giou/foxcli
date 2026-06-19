@@ -34,18 +34,28 @@ fn run(cli: Cli, renderer: &Renderer) -> std::io::Result<i32> {
             Ok(0)
         }
         Some(Command::Sideload) => {
-            let message = "Successfully started sideload. You can use: adb sideload <path.zip>";
-            renderer.sideload_notice(message);
+            // Printed before the engine starts streaming; also echoed into the
+            // JSON object via `json_note` for non-streaming consumers.
+            let note = "Successfully started sideload. You can use: adb sideload <path.zip>";
+            renderer.sideload_notice(note);
             run_engine_command(
                 "sideload",
                 vec!["sideload".to_string()],
                 renderer,
-                Some(message),
+                Some(note),
+                false,
             )
         }
         Some(command) => {
             let name = command.display_name();
-            run_engine_command(name, command.into_engine_argv(), renderer, None)
+            let render_plain = command.renders_plain();
+            run_engine_command(
+                name,
+                command.into_engine_argv(),
+                renderer,
+                None,
+                render_plain,
+            )
         }
     }
 }
@@ -61,26 +71,17 @@ fn run_engine_command(
     name: &'static str,
     argv: Vec<String>,
     renderer: &Renderer,
-    message: Option<&str>,
+    json_note: Option<&str>,
+    render_plain: bool,
 ) -> std::io::Result<i32> {
-    let quiet = renderer.json() || should_render_plain(&argv);
+    let quiet = renderer.json() || render_plain;
     let response = send_command(&argv, quiet)?;
     renderer.command_response(CommandResult {
         command: name,
         exit_code: response.exit_code,
         stdout: &response.stdout,
-        message,
+        json_note,
         streamed: !quiet,
     });
     Ok(response.exit_code)
-}
-
-fn should_render_plain(argv: &[String]) -> bool {
-    matches!(
-        (
-            argv.get(0).map(String::as_str),
-            argv.get(1).map(String::as_str)
-        ),
-        (Some("wlan"), Some("list" | "saved" | "info"))
-    )
 }

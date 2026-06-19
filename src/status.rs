@@ -51,6 +51,19 @@ impl StatusSnapshot {
         out
     }
 
+    /// Keys whose raw "0"/"1" value represents a boolean. Kept next to `set`
+    /// so the two stay in sync; the JSON renderer uses it to emit real bools.
+    pub fn is_bool_key(key: &str) -> bool {
+        matches!(
+            key,
+            "storage_encrypted"
+                | "storage_decrypted"
+                | "dynamic_partitions"
+                | "virtual_ab"
+                | "rom_miui"
+        )
+    }
+
     fn set(&mut self, key: &str, value: &str) {
         match key {
             "release" => self.release = value.to_string(),

@@ -50,6 +50,16 @@ impl Command {
         }
     }
 
+    /// Whether the engine's output should be captured and rendered by the CLI
+    /// (plain mode) rather than streamed through verbatim. Derived from the
+    /// typed command so it can't drift from the argv builder below.
+    pub fn renders_plain(&self) -> bool {
+        match self {
+            Command::Wlan(wlan) => wlan.command.renders_plain(),
+            _ => false,
+        }
+    }
+
     pub fn into_engine_argv(self) -> Vec<String> {
         match self {
             Command::Status => vec!["status".to_string()],
@@ -181,6 +191,13 @@ enum WlanCommand {
     Test,
 }
 
+impl WlanCommand {
+    /// Read-only queries whose output is captured and pretty-printed.
+    fn renders_plain(&self) -> bool {
+        matches!(self, WlanCommand::List | WlanCommand::Saved | WlanCommand::Info)
+    }
+}
+
 #[derive(Args)]
 pub struct Wlan {
     #[command(subcommand)]
@@ -269,4 +286,82 @@ fn prepend(verb: &str, values: Vec<String>) -> Vec<String> {
     out.push(verb.to_string());
     out.extend(values);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // One value per `Command` variant. The exhaustive match means adding or
+    // removing a variant forces this list (and the help catalog) to be updated.
+    fn one_of_each() -> Vec<Command> {
+        let all = vec![
+            Command::Status,
+            Command::Mount(Paths { path: vec![] }),
+            Command::Unmount(Paths { path: vec![] }),
+            Command::Flash(Flash {
+                zip: String::new(),
+                no_verify: false,
+            }),
+            Command::Backup(Backup {
+                part: vec![],
+                name: None,
+                compress: false,
+                no_digest: false,
+            }),
+            Command::Restore(Restore {
+                part: vec![],
+                name: String::new(),
+                no_digest_check: false,
+            }),
+            Command::Decrypt(Decrypt {
+                password: None,
+                user: None,
+            }),
+            Command::Sideload,
+            Command::Wlan(Wlan {
+                command: WlanCommand::Info,
+            }),
+            Command::Reboot(Reboot { target: None }),
+            Command::Internal(Internal {
+                command: InternalCommand::Go(InternalGo { page: String::new() }),
+            }),
+            Command::Ors(Script {
+                script_file: String::new(),
+            }),
+            Command::OrsCmd(Raw { raw: vec![] }),
+        ];
+        for command in &all {
+            // Compile-time exhaustiveness guard: a new variant breaks the build
+            // here until it is added above and to the help catalog.
+            match command {
+                Command::Status
+                | Command::Mount(_)
+                | Command::Unmount(_)
+                | Command::Flash(_)
+                | Command::Backup(_)
+                | Command::Restore(_)
+                | Command::Decrypt(_)
+                | Command::Sideload
+                | Command::Wlan(_)
+                | Command::Reboot(_)
+                | Command::Internal(_)
+                | Command::Ors(_)
+                | Command::OrsCmd(_) => {}
+            }
+        }
+        all
+    }
+
+    #[test]
+    fn every_command_is_in_help_catalog() {
+        let names: Vec<&str> = crate::output::command_names().collect();
+        for command in one_of_each() {
+            let name = command.display_name();
+            assert!(
+                names.contains(&name),
+                "command `{name}` is missing from the help catalog in output.rs"
+            );
+        }
+    }
 }
