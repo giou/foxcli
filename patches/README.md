@@ -39,19 +39,10 @@ Not patched, and why:
 
 ## Applying (in the sync-sources script)
 
-The patch paths are relative to the crates repo root, so apply from there:
-
 ```sh
-CRATES=external/rust/android-crates-io
-for p in external/foxcli/patches/*-recovery-available.patch; do
-    git -C "$CRATES" apply --3way "$p"
-done
-```
-
-To make re-runs idempotent, skip patches that are already applied:
-
-```sh
-for p in external/foxcli/patches/*-recovery-available.patch; do
+ROOT=$PWD
+CRATES="$ROOT/external/rust/android-crates-io"
+for p in "$ROOT"/external/foxcli/patches/*-recovery-available.patch; do
     git -C "$CRATES" apply --reverse --check "$p" 2>/dev/null && continue  # already applied
     git -C "$CRATES" apply "$p"
 done
