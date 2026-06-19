@@ -38,10 +38,14 @@ all real work (mount, flash, decrypt, …) happens engine-side in
 
 ## Conventions & invariants — don't break these
 
-1. **No new dependencies without checking.** This is a `recovery: true` binary;
-   keep it lean. `serde`/`serde_json` are **not** vendored in this tree, which is
-   why JSON is hand-rolled in `output.rs`. Don't "modernize" it with serde unless
-   you've confirmed the crates exist with recovery variants.
+1. **New dependencies must be recovery-capable.** This is a `recovery: true`
+   binary, so every `rustlib` it links must have `recovery_available: true`.
+   JSON uses `libserde` + `libserde_json` (via `libserde_derive`); enabling
+   `serde_json` required adding `recovery_available` to it and its leaf deps
+   (`itoa`, `ryu`, `memchr`) — done in both their generated `Android.bp` *and*
+   their `cargo_embargo.json` (the latter so the flag survives crate re-import).
+   Before adding another crate, check/patch its recovery availability the same
+   way, and keep the binary lean.
 
 2. **The command list has two halves that must agree.** `args.rs`'s `Command`
    enum (parsing) and `output.rs`'s `COMMANDS` catalog (help/JSON listing). The
@@ -64,11 +68,13 @@ all real work (mount, flash, decrypt, …) happens engine-side in
    request cap) mirror `fox_cli.cpp` / `gui/gui.cpp`. Change one side, change the
    other.
 
-6. **JSON is a contract.** `--json` emits exactly one object on stdout. If you
-   add fields, prefer additive changes; don't reorder or rename existing keys
-   without a reason. Bool status keys are decided by
-   `StatusSnapshot::is_bool_key` (kept next to `set`), not duplicated in
-   `output.rs`.
+6. **JSON is a contract.** `--json` emits exactly one object on stdout, produced
+   by `#[derive(Serialize)]` wrapper structs in `output.rs` (`ErrorJson`,
+   `CommandJson`, `DecryptHelpJson`, `StatusJson`). If you add fields, prefer
+   additive changes; don't reorder or rename existing keys without a reason
+   (note `CommandInfo.usage` is renamed to `command` via `#[serde(rename)]`). The
+   status object is just `StatusSnapshot` serialized directly, so its typed
+   fields *are* the schema — bools serialize as real booleans automatically.
 
 ## Gotchas
 

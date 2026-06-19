@@ -69,8 +69,12 @@ m foxcli      # produces the `fox` binary (recovery variant)
 ```
 
 `Android.bp` declares a `rust_binary` named `foxcli` (stem `fox`) that links
-`libclap`. It is a `recovery: true` binary, so its dependency set is limited to
-what is available in the recovery variant.
+`libclap` for argument parsing and `libserde` / `libserde_json` (with the
+`libserde_derive` proc-macro) for `--json` output. It is a `recovery: true`
+binary, so every dependency must be `recovery_available`. `serde_json` and its
+leaf deps (`itoa`, `ryu`, `memchr`) were not recovery-available upstream; that
+flag was added to both their `Android.bp` and `cargo_embargo.json` under
+`external/rust/android-crates-io/crates/`.
 
 ## License
 
