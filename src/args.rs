@@ -26,6 +26,14 @@ pub enum Command {
     Wlan(Wlan),
     Reboot(Reboot),
     Internal(Internal),
+    Wipe(Wipe),
+    #[command(name = "format_data")]
+    FormatData(FormatData),
+    Reflash,
+    Mtp(Mtp),
+    Log,
+    Partition(Partition),
+    Addons(Addons),
     Ors(Script),
     #[command(name = "ors-cmd")]
     OrsCmd(Raw),
@@ -45,6 +53,13 @@ impl Command {
             Command::Wlan(_) => "wlan",
             Command::Reboot(_) => "reboot",
             Command::Internal(_) => "internal",
+            Command::Wipe(_) => "wipe",
+            Command::FormatData(_) => "format_data",
+            Command::Reflash => "reflash",
+            Command::Mtp(_) => "mtp",
+            Command::Log => "log",
+            Command::Partition(_) => "partition",
+            Command::Addons(_) => "addons",
             Command::Ors(_) => "ors",
             Command::OrsCmd(_) => "ors-cmd",
         }
@@ -56,6 +71,12 @@ impl Command {
     pub fn renders_plain(&self) -> bool {
         match self {
             Command::Wlan(wlan) => wlan.command.renders_plain(),
+            // No-argument listing forms emit a FOX_LIST block to be tabulated.
+            Command::Mount(p) | Command::Unmount(p) => p.path.is_empty(),
+            Command::Backup(b) => b.part.is_empty(),
+            Command::Wipe(w) => w.target.is_empty(),
+            Command::Partition(p) => p.path.is_none(),
+            Command::Addons(a) => a.action.is_none(),
             _ => false,
         }
     }
@@ -66,9 +87,25 @@ impl Command {
             Command::Mount(paths) => prepend("mount", paths.path),
             Command::Unmount(paths) => prepend("unmount", paths.path),
             Command::Flash(flash) => {
-                let mut out = vec!["flash".to_string(), flash.zip];
+                let mut out = vec!["flash".to_string()];
+                out.extend(flash.zip);
                 if flash.no_verify {
                     out.push("--no-verify".to_string());
+                }
+                if flash.verify {
+                    out.push("--verify".to_string());
+                }
+                if flash.reflash {
+                    out.push("--reflash".to_string());
+                }
+                if flash.no_reflash {
+                    out.push("--no-reflash".to_string());
+                }
+                if flash.unmount_system {
+                    out.push("--unmount-system".to_string());
+                }
+                if flash.unmount_vendor {
+                    out.push("--unmount-vendor".to_string());
                 }
                 out
             }
@@ -78,20 +115,28 @@ impl Command {
                 if let Some(name) = backup.name {
                     out.extend(["--name".to_string(), name]);
                 }
-                if backup.compress {
-                    out.push("--compress".to_string());
+                if let Some(path) = backup.path {
+                    out.extend(["--path".to_string(), path]);
                 }
-                if backup.no_digest {
-                    out.push("--no-digest".to_string());
+                if backup.compression {
+                    out.push("--compression".to_string());
+                }
+                if backup.disable_digest_generation {
+                    out.push("--disable-digest-generation".to_string());
                 }
                 out
             }
             Command::Restore(restore) => {
                 let mut out = vec!["restore".to_string()];
                 out.extend(restore.part);
-                out.extend(["--name".to_string(), restore.name]);
-                if restore.no_digest_check {
-                    out.push("--no-digest-check".to_string());
+                if let Some(name) = restore.name {
+                    out.extend(["--name".to_string(), name]);
+                }
+                if let Some(path) = restore.path {
+                    out.extend(["--path".to_string(), path]);
+                }
+                if restore.disable_digest_check {
+                    out.push("--disable-digest-check".to_string());
                 }
                 out
             }
@@ -115,6 +160,39 @@ impl Command {
                 out
             }
             Command::Internal(internal) => flatten_internal(internal.command),
+            Command::Wipe(wipe) => prepend("wipe", wipe.target),
+            Command::FormatData(fd) => {
+                let mut out = vec!["format_data".to_string()];
+                if fd.yes {
+                    out.push("--yes".to_string());
+                }
+                out
+            }
+            Command::Reflash => vec!["reflash".to_string()],
+            Command::Mtp(mtp) => {
+                let mut out = vec!["mtp".to_string()];
+                if let Some(action) = mtp.action {
+                    out.push(action.to_string());
+                }
+                out
+            }
+            Command::Log => vec!["log".to_string()],
+            Command::Partition(partition) => {
+                let mut out = vec!["partition".to_string()];
+                if let Some(path) = partition.path {
+                    out.push(path);
+                    out.extend(partition.op);
+                }
+                out
+            }
+            Command::Addons(addons) => {
+                let mut out = vec!["addons".to_string()];
+                if let Some(action) = addons.action {
+                    out.push(action);
+                    out.extend(addons.names);
+                }
+                out
+            }
             Command::Ors(script) => vec!["ors".to_string(), script.script_file],
             Command::OrsCmd(raw) => prepend("ors-cmd", raw.raw),
         }
@@ -123,36 +201,109 @@ impl Command {
 
 #[derive(Args)]
 pub struct Paths {
-    #[arg(required = true)]
+    /// Partition(s) to act on. With none, lists partitions and their mount state.
     path: Vec<String>,
 }
 
 #[derive(Args)]
 pub struct Flash {
-    zip: String,
+    #[arg(required = true)]
+    zip: Vec<String>,
     #[arg(long)]
     no_verify: bool,
+    #[arg(long)]
+    verify: bool,
+    /// Reflash OrangeFox after flashing (overrides the UI default).
+    #[arg(long)]
+    reflash: bool,
+    #[arg(long)]
+    no_reflash: bool,
+    #[arg(long)]
+    unmount_system: bool,
+    #[arg(long)]
+    unmount_vendor: bool,
 }
 
 #[derive(Args)]
 pub struct Backup {
-    #[arg(required = true)]
+    /// Partition(s) to back up. With none, lists what can be backed up.
     part: Vec<String>,
     #[arg(long)]
     name: Option<String>,
+    /// Destination storage path for the backup.
     #[arg(long)]
-    compress: bool,
+    path: Option<String>,
     #[arg(long)]
-    no_digest: bool,
+    compression: bool,
+    #[arg(long)]
+    disable_digest_generation: bool,
 }
 
 #[derive(Args)]
 pub struct Restore {
     part: Vec<String>,
+    /// Backup name under the storage's backups folder.
     #[arg(long)]
-    name: String,
+    name: Option<String>,
+    /// Absolute path to a backup folder.
     #[arg(long)]
-    no_digest_check: bool,
+    path: Option<String>,
+    #[arg(long)]
+    disable_digest_check: bool,
+}
+
+#[derive(Args)]
+pub struct Wipe {
+    /// Partition(s) or keywords (dalvik, cache) to wipe. With none, lists wipeable partitions.
+    target: Vec<String>,
+}
+
+#[derive(Args)]
+pub struct FormatData {
+    /// Confirm the destructive full data format (erases everything, removes encryption).
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum MtpAction {
+    Status,
+    Enable,
+    Disable,
+}
+
+impl MtpAction {
+    fn to_string(self) -> String {
+        match self {
+            MtpAction::Status => "status",
+            MtpAction::Enable => "enable",
+            MtpAction::Disable => "disable",
+        }
+        .to_string()
+    }
+}
+
+#[derive(Args)]
+pub struct Mtp {
+    /// status (default), enable, or disable.
+    action: Option<MtpAction>,
+}
+
+#[derive(Args)]
+pub struct Partition {
+    /// Partition path. With none, lists partitions with file system and capabilities.
+    path: Option<String>,
+    /// Operation: repair | resize | change-fs <fs> | wipe.
+    #[arg(trailing_var_arg = true)]
+    op: Vec<String>,
+}
+
+#[derive(Args)]
+pub struct Addons {
+    /// list (default) or install.
+    action: Option<String>,
+    /// Addon zip name(s) or path(s) when installing.
+    names: Vec<String>,
 }
 
 #[derive(Args)]
@@ -300,19 +451,26 @@ mod tests {
             Command::Mount(Paths { path: vec![] }),
             Command::Unmount(Paths { path: vec![] }),
             Command::Flash(Flash {
-                zip: String::new(),
+                zip: vec![],
                 no_verify: false,
+                verify: false,
+                reflash: false,
+                no_reflash: false,
+                unmount_system: false,
+                unmount_vendor: false,
             }),
             Command::Backup(Backup {
                 part: vec![],
                 name: None,
-                compress: false,
-                no_digest: false,
+                path: None,
+                compression: false,
+                disable_digest_generation: false,
             }),
             Command::Restore(Restore {
                 part: vec![],
-                name: String::new(),
-                no_digest_check: false,
+                name: None,
+                path: None,
+                disable_digest_check: false,
             }),
             Command::Decrypt(Decrypt {
                 password: None,
@@ -325,6 +483,19 @@ mod tests {
             Command::Reboot(Reboot { target: None }),
             Command::Internal(Internal {
                 command: InternalCommand::Go(InternalGo { page: String::new() }),
+            }),
+            Command::Wipe(Wipe { target: vec![] }),
+            Command::FormatData(FormatData { yes: false }),
+            Command::Reflash,
+            Command::Mtp(Mtp { action: None }),
+            Command::Log,
+            Command::Partition(Partition {
+                path: None,
+                op: vec![],
+            }),
+            Command::Addons(Addons {
+                action: None,
+                names: vec![],
             }),
             Command::Ors(Script {
                 script_file: String::new(),
@@ -346,6 +517,13 @@ mod tests {
                 | Command::Wlan(_)
                 | Command::Reboot(_)
                 | Command::Internal(_)
+                | Command::Wipe(_)
+                | Command::FormatData(_)
+                | Command::Reflash
+                | Command::Mtp(_)
+                | Command::Log
+                | Command::Partition(_)
+                | Command::Addons(_)
                 | Command::Ors(_)
                 | Command::OrsCmd(_) => {}
             }

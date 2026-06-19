@@ -55,6 +55,9 @@ impl Renderer {
 
     pub fn command_response(&self, result: CommandResult<'_>) {
         if self.json {
+            // List commands emit a FOX_LIST block; surface it as a structured
+            // array rather than only as raw stdout text.
+            let partitions = parse_partition_rows(result.stdout);
             print_json(&CommandJson {
                 ok: result.exit_code == 0,
                 exit_code: result.exit_code,
@@ -62,6 +65,7 @@ impl Renderer {
                 message: result.json_note,
                 stdout: result.stdout,
                 lines: result.stdout.lines().collect(),
+                partitions,
             });
         } else if !result.streamed {
             self.render_plain_command(result);
@@ -172,6 +176,15 @@ impl Renderer {
     }
 
     fn render_plain_command(&self, result: CommandResult<'_>) {
+        if let Some(rows) = parse_partition_rows(result.stdout) {
+            if result.command == "addons" {
+                self.render_addons(&rows);
+            } else {
+                self.render_partition_table(&rows);
+            }
+            return;
+        }
+
         if result.command == "wlan" {
             for line in result.stdout.lines().filter(|line| !line.trim().is_empty()) {
                 println!("  {} {}", self.paint(Color::Green, "*"), line);
@@ -181,6 +194,44 @@ impl Renderer {
 
         print!("{}", result.stdout);
         let _ = io::stdout().flush();
+    }
+
+    fn render_partition_table(&self, rows: &[PartitionRow]) {
+        if rows.is_empty() {
+            println!("  {}", self.paint(Color::Dim, "(none)"));
+            return;
+        }
+        for row in rows {
+            let mark = if row.mounted {
+                self.paint(Color::Green, "[x]")
+            } else {
+                self.paint(Color::Dim, "[ ]")
+            };
+            let mut line = format!("  {} {}", mark, row.display_name);
+            if !row.mount_point.is_empty() && row.mount_point != row.display_name {
+                line.push_str(&format!("  {}", self.paint(Color::Dim, &row.mount_point)));
+            }
+            if !row.extra.is_empty() {
+                line.push_str(&format!("  {}", self.paint(Color::Dim, &row.extra)));
+            }
+            println!("{line}");
+        }
+    }
+
+    fn render_addons(&self, rows: &[PartitionRow]) {
+        if rows.is_empty() {
+            println!("  {}", self.paint(Color::Dim, "(no addons found)"));
+            return;
+        }
+        for row in rows {
+            // display_name = file name, mount_point = full path.
+            println!(
+                "  {} {}  {}",
+                self.paint(Color::Green, "*"),
+                row.display_name,
+                self.paint(Color::Dim, &row.mount_point)
+            );
+        }
     }
 
     fn row(&self, label: &str, value: &str) {
@@ -243,14 +294,21 @@ pub struct CommandInfo {
 const COMMANDS: &[CommandInfo] = &[
     CommandInfo { name: "fox", usage: "fox", summary: "show device status and this command list" },
     CommandInfo { name: "status", usage: "fox status", summary: "show device status" },
-    CommandInfo { name: "mount", usage: "fox mount <path...>", summary: "mount one or more partitions" },
-    CommandInfo { name: "unmount", usage: "fox unmount <path...>", summary: "unmount one or more partitions" },
-    CommandInfo { name: "flash", usage: "fox flash <zip> [--no-verify]", summary: "flash a zip" },
-    CommandInfo { name: "backup", usage: "fox backup <part...>", summary: "create a backup" },
+    CommandInfo { name: "mount", usage: "fox mount [partition...]", summary: "mount partitions, or list mount state" },
+    CommandInfo { name: "unmount", usage: "fox unmount [partition...]", summary: "unmount partitions, or list mount state" },
+    CommandInfo { name: "flash", usage: "fox flash <zip...> [--no-verify] [--reflash]", summary: "flash one or more zips" },
+    CommandInfo { name: "backup", usage: "fox backup [part...] [--name <n>] [--compression]", summary: "back up partitions, or list backupable" },
     CommandInfo { name: "restore", usage: "fox restore --name <backup> [part...]", summary: "restore a backup" },
+    CommandInfo { name: "wipe", usage: "fox wipe [partition...]", summary: "wipe partitions, or list wipeable" },
+    CommandInfo { name: "format_data", usage: "fox format_data --yes", summary: "full data format (removes encryption)" },
+    CommandInfo { name: "partition", usage: "fox partition [<path> <op>]", summary: "list partitions or repair/resize/change-fs/wipe" },
     CommandInfo { name: "decrypt", usage: "fox decrypt [password] [--user <id>]", summary: "decrypt storage or show pattern help" },
     CommandInfo { name: "sideload", usage: "fox sideload", summary: "start adb sideload mode" },
+    CommandInfo { name: "mtp", usage: "fox mtp <status|enable|disable>", summary: "control MTP" },
     CommandInfo { name: "wlan", usage: "fox wlan <subcommand>", summary: "manage WLAN" },
+    CommandInfo { name: "log", usage: "fox log", summary: "save a recovery log zip" },
+    CommandInfo { name: "reflash", usage: "fox reflash", summary: "reflash the current OrangeFox" },
+    CommandInfo { name: "addons", usage: "fox addons [install <name...>]", summary: "list or install Fox addons" },
     CommandInfo { name: "reboot", usage: "fox reboot [target]", summary: "reboot to a target" },
     CommandInfo { name: "internal", usage: "fox internal <get|set|go>", summary: "read or update recovery internals" },
     CommandInfo { name: "ors", usage: "fox ors <file>", summary: "run an OpenRecoveryScript file" },
@@ -296,6 +354,50 @@ struct CommandJson<'a> {
     message: Option<&'a str>,
     stdout: &'a str,
     lines: Vec<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    partitions: Option<Vec<PartitionRow>>,
+}
+
+/// One record from a FOX_LIST block emitted by listing commands (mount, backup,
+/// wipe, partition, addons). `extra` carries fs/capability flags when present.
+#[derive(Serialize)]
+pub struct PartitionRow {
+    pub mount_point: String,
+    pub display_name: String,
+    pub mounted: bool,
+    pub extra: String,
+}
+
+/// Parse a `FOX_LIST_BEGIN`/`FOX_LIST_END` block into rows. Returns `None` when
+/// no block is present (so callers fall back to raw output).
+fn parse_partition_rows(stdout: &str) -> Option<Vec<PartitionRow>> {
+    let mut in_block = false;
+    let mut rows = Vec::new();
+    for line in stdout.lines() {
+        match line {
+            "FOX_LIST_BEGIN" => {
+                in_block = true;
+                continue;
+            }
+            "FOX_LIST_END" => return Some(rows),
+            _ => {}
+        }
+        if !in_block {
+            continue;
+        }
+        let mut fields = line.splitn(4, '\t');
+        rows.push(PartitionRow {
+            mount_point: fields.next().unwrap_or("").to_string(),
+            display_name: fields.next().unwrap_or("").to_string(),
+            mounted: fields.next().unwrap_or("0") == "1",
+            extra: fields.next().unwrap_or("").to_string(),
+        });
+    }
+    if in_block {
+        Some(rows)
+    } else {
+        None
+    }
 }
 
 #[derive(Serialize)]
@@ -313,4 +415,27 @@ struct StatusJson<'a> {
     command: &'a str,
     status: &'a StatusSnapshot,
     commands: &'a [CommandInfo],
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_fox_list_block() {
+        let s = "FOX_LIST_BEGIN\n/system\tSystem\t1\tfs=ext4,repair\n\
+                 /data\tData (2 GB)\t0\t\nFOX_LIST_END\n";
+        let rows = parse_partition_rows(s).expect("a list block");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].mount_point, "/system");
+        assert!(rows[0].mounted);
+        assert_eq!(rows[0].extra, "fs=ext4,repair");
+        assert_eq!(rows[1].display_name, "Data (2 GB)");
+        assert!(!rows[1].mounted);
+    }
+
+    #[test]
+    fn no_block_returns_none() {
+        assert!(parse_partition_rows("just streamed text\n").is_none());
+    }
 }
