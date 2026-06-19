@@ -59,6 +59,9 @@ Global flags (valid before or after the subcommand):
 The engine side lives in `bootable/recovery/fox_cli.{cpp,hpp}`, wired up in
 `gui/gui.cpp` and `gui/action.cpp`.
 
+See [`docs/fox-fifo-protocol.md`](docs/fox-fifo-protocol.md) for the full
+`foxin`/`foxout` transport specification.
+
 ## Building
 
 This crate is built by the Android build system (Soong), not Cargo — there is
