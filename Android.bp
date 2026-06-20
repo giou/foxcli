@@ -27,6 +27,7 @@ rust_binary {
     ],
     rustlibs: [
         "libclap",
+        "liblibc",
         "libserde",
         "libserde_json",
     ],

@@ -10,6 +10,7 @@ pub struct CommandResult<'a> {
     pub command: &'a str,
     pub exit_code: i32,
     pub stdout: &'a str,
+    pub progress_percent: Option<u8>,
     /// Surfaced only in JSON output. In plain mode any such notice is printed
     /// by the caller before the engine streams (see `sideload_notice`).
     pub json_note: Option<&'a str>,
@@ -19,21 +20,30 @@ pub struct CommandResult<'a> {
 pub struct Renderer {
     json: bool,
     color: bool,
+    interactive: bool,
 }
 
 impl Renderer {
     pub fn new(json: bool, no_color: bool) -> Self {
         let term_ok = io::stdout().is_terminal()
-            && env::var_os("NO_COLOR").is_none()
             && env::var("TERM").map(|term| term != "dumb").unwrap_or(true);
         Self {
             json,
-            color: !json && !no_color && term_ok,
+            color: !json && !no_color && term_ok && env::var_os("NO_COLOR").is_none(),
+            interactive: !json && term_ok,
         }
     }
 
     pub fn json(&self) -> bool {
         self.json
+    }
+
+    pub fn interactive(&self) -> bool {
+        self.interactive
+    }
+
+    pub fn color(&self) -> bool {
+        self.color
     }
 
     pub fn error(&self, message: &str) {
@@ -66,6 +76,7 @@ impl Renderer {
                 message: result.json_note,
                 stdout: result.stdout,
                 lines: result.stdout.lines().collect(),
+                progress_percent: result.progress_percent,
                 partitions,
             });
         } else if !result.streamed {
@@ -1342,6 +1353,8 @@ struct CommandJson<'a> {
     message: Option<&'a str>,
     stdout: &'a str,
     lines: Vec<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    progress_percent: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     partitions: Option<Vec<PartitionRow>>,
 }

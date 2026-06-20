@@ -33,6 +33,13 @@ Each patch touches two files per crate:
 | `memchr-recovery-available.patch`     | `memchr` | `serde_json` dependency |
 
 Not patched, and why:
+`libc` (Ctrl+C / SIGINT handling for cancellable operations):
+
+| Patch | Crate | Reason |
+|-------|-------|--------|
+| `libc-recovery-available.patch` | `libc` | SIGINT handler + cancel FIFO write |
+
+Not patched, and why:
 - `serde` — already ships `recovery_available: true` upstream (AOSP).
 - `serde_derive`, `clap_derive` — `rust_proc_macro` crates run on the host at
   build time, so they don't need a recovery variant.

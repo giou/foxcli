@@ -162,6 +162,77 @@ inside `foxout`; therefore multiple clients writing concurrently are undefined.
 
 External callers should serialize invocations.
 
+## Progress lines
+
+While a long-running command (flash, backup, restore) executes, the engine
+mirrors its progress percentage into the response stream as standalone lines:
+
+```text
+FOX_PROGRESS\tpercent=<n>\n
+```
+
+where the prefix is the literal `FOX_PROGRESS` followed by a TAB (`0x09`), then
+one or more TAB-separated `key=value` fields. Each value is an integer or float
+in the range `0..=100`. Defined fields:
+
+- `percent` -- overall operation progress (the whole flash/backup/restore).
+- `item` -- the current item's own progress (the partition or file currently
+  being processed in a multi-partition backup/restore).
+
+A line may carry either or both fields, e.g. `FOX_PROGRESS\tpercent=42\titem=12`.
+
+Rules:
+
+- These lines are emitted in-band on `foxout`, interleaved with normal output.
+- The engine tracks each field independently and suppresses duplicate
+  consecutive values to avoid flooding the FIFO during a long operation.
+- They are only emitted while a fox command is active; the legacy ORS channel is
+  never affected.
+- A conforming client consumes and removes well-formed `FOX_PROGRESS` lines from
+  the displayed/captured output, using them to drive a progress indicator. A
+  malformed `FOX_PROGRESS` line (a field without `=`, an unparsable or
+  out-of-range number, or no recognized field) is left in the output as ordinary
+  text. A well-formed but unknown field is ignored as long as a known field is
+  present, so the prefix stays safe to extend.
+- When no explicit `item` value has been received for the current item, the
+  client may mirror `percent` onto it, so single-item flashes and item-less
+  restores still show a moving item bar.
+
+Engine side: `gui_fox_progress_begin()`/`gui_fox_progress_end()` bracket the
+command in `gui/gui.cpp`. `gui_fox_progress_overall()` (in `gui/console.cpp`) is
+invoked from `DataManager::_SetProgress` whenever the overall `ui_progress` value
+lands, and `gui_fox_progress_item()` is invoked from
+`ProgressTracking::UpdateDisplayDetails` with the current partition's own
+percentage.
+
+## Cancellation
+
+Some operations (currently `backup`) can be aborted mid-flight. Because the
+request/response channel is single-command and the engine does not read `foxin`
+while a command runs, cancellation uses a dedicated out-of-band FIFO:
+
+- Cancel FIFO: `/system/bin/foxcancel` (`FOX_CANCEL_FILE` in `orscmd/orscmd.h`)
+
+The recovery GUI creates this FIFO and watches it from the event loop **at all
+times**, including while a command is running. To cancel, a client writes any
+byte to it; the engine invokes `PartitionManager.Cancel_Backup()`, which stops
+the running backup. The backup then ends normally through the response stream:
+the engine prints `Backup cancelled` and the exit sentinel with code `130`
+(`128 + SIGINT`, the shell convention for Ctrl+C).
+
+Client responsibilities:
+
+- A cancellable command is determined by the client (it knows what it sent).
+- The client installs a SIGINT handler so Ctrl+C records a cancel request instead
+  of terminating; on the first request it writes to the cancel FIFO and keeps
+  reading `foxout` until the exit sentinel arrives. A second Ctrl+C force-exits.
+- The cancel FIFO write end should be opened non-blocking so a missing reader
+  fails fast rather than hanging.
+- Non-cancellable commands (e.g. `flash`) leave the default SIGINT behavior in
+  place -- interrupting a flash can brick a device.
+
+The engine ignores cancel writes when no command is running.
+
 ## Structured output blocks
 
 The FIFO protocol only frames request and response transport. Higher-level
