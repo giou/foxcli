@@ -8,16 +8,16 @@ editing. See `README.md` for user-facing usage and the wire protocol.
 `foxcli` is the Rust client binary `fox` that runs inside OrangeFox recovery and
 talks to the GUI engine over a FIFO pair. It only *formats* requests/responses —
 all real work (mount, flash, decrypt, …) happens engine-side in
-`bootable/recovery/fox_cli.{cpp,hpp}`. Keep the two ends consistent.
+`bootable/recovery/fox_fifo/fox_fifo.{cpp,hpp}`. Keep the two ends consistent.
 
 ## Module map (`src/`)
 
 - `main.rs` — entry point and dispatch. Decides JSON vs plain, whether to stream
   or capture output, and routes each command through `run_engine_command`.
 - `args.rs` — the clap CLI definition (`Cli`, `Command`, subcommand structs) and
-  the `Command::into_engine_argv` mapping that produces the engine argv.
-- `transport.rs` — the FIFO protocol: NUL-delimited argv out, streamed output
-  back, terminated by the `\x04EXIT <code>\n` sentinel.
+  the typed command flattening used by the RPC transport adapter.
+- `transport.rs` — the FIFO protocol: Fox RPC JSON request out, NDJSON event
+  stream back, terminated by a final `result` event.
 - `status.rs` — parses the `FOX_STATUS_BEGIN/END` key=value block from
   `fox status` into a typed `StatusSnapshot`.
 - `output.rs` — all rendering (plain + colored, and the hand-rolled JSON), plus
@@ -63,10 +63,11 @@ all real work (mount, flash, decrypt, …) happens engine-side in
    `gui/patternpassword.cpp` (`char = dot_index + '1'`). If that changes, update
    the help and the worked examples together.
 
-5. **Engine protocol is shared.** `transport.rs` constants
-   (`FOX_INPUT_FILE`, `FOX_OUTPUT_FILE`, the `\x04EXIT ` sentinel, the 4096-byte
-   request cap) mirror `fox_cli.cpp` / `gui/gui.cpp`. Change one side, change the
-   other.
+5. **Engine protocol is shared.** `transport.rs` constants and the Fox RPC v1
+   request/event shape mirror `bootable/recovery/fox_fifo`. Change one side,
+   change the other. The op/args field contract is the single shared table in
+   `bootable/recovery/docs/fox-rpc-schema.md` — `Command::to_request()` here and
+   the engine's `Cmd_*` `arg_*` reads must both match it.
 
 6. **JSON is a contract.** `--json` emits exactly one object on stdout, produced
    by `#[derive(Serialize)]` wrapper structs in `output.rs` (`ErrorJson`,

@@ -1,257 +1,58 @@
-# Fox FIFO protocol
+# Fox RPC FIFO Protocol
 
-This document specifies the local IPC protocol between the `fox` CLI client and
-the running OrangeFox recovery engine.
+`fox` talks to the OrangeFox recovery engine through the Fox RPC v1 protocol.
+The FIFO pair is only a transport; the same request object is also accepted by
+the WLAN webserver job API.
 
-The protocol is intentionally small: one request is sent as an argv vector over
-`foxin`, and one response stream is read from `foxout` until an exit-code
-sentinel is received.
-
-## Endpoints
-
-The recovery GUI owns both FIFOs:
+## Paths
 
 - Input FIFO: `/system/bin/foxin`
 - Output FIFO: `/system/bin/foxout`
+- Cancel FIFO: `/system/bin/foxcancel`
 
-The symbolic constants are defined engine-side in `orscmd/orscmd.h`:
+## Request
 
-- `FOX_INPUT_FILE`
-- `FOX_OUTPUT_FILE`
-- `FOX_EXIT_SENTINEL`
+Write one UTF-8 JSON object to `foxin`, then close it:
 
-The current sentinel byte sequence is:
-
-```text
-\x04EXIT 
+```json
+{"v":1,"id":"optional-client-id","op":"status","args":{}}
 ```
 
-That is ASCII EOT (`0x04`), then `EXIT`, then one space.
+Fields:
 
-## Lifecycle
+- `v`: protocol version, currently `1`.
+- `id`: optional client id, echoed on events when present.
+- `op`: operation name.
+- `args`: operation-specific object; missing args are treated as `{}`.
 
-1. The recovery GUI starts and calls `setup_fox_command()`.
-2. The GUI removes stale `foxin`/`foxout` FIFO nodes.
-3. The GUI creates:
-   - `foxin` with mode `0660`
-   - `foxout` with mode `0666`
-4. The GUI opens `foxin` as non-blocking read-only and watches it from the GUI
-   event loop.
-5. A client opens `foxin` for writing, writes exactly one encoded request, then
-   closes it.
-6. The GUI reads the request, opens `foxout` for writing, and routes `gui_print`
-   output to `foxout`.
-7. The GUI dispatches the `foxcmd` action, which calls `Fox_CLI::Run_Command()`
-   on the recovery action thread.
-8. The engine writes normal command output to `foxout`, then writes the exit
-   sentinel plus numeric exit code.
-9. The GUI closes `foxout`, clears the mirrored output target, and recreates the
-   FIFO pair for the next request.
+## Response
 
-The protocol is single-command-at-a-time. It is not a multiplexed transport.
+Read newline-delimited JSON events from `foxout` until the final `result` event:
 
-## Request format
-
-Requests are NUL-delimited argv vectors.
-
-Each argument is written as raw bytes followed by `NUL` (`0x00`). A final empty
-field terminates the vector.
-
-For argv:
-
-```text
-["backup", "boot", "data", "--storage", "microsd"]
+```json
+{"event":"log","text":"Mounting /data\n"}
+{"event":"progress","phase":"overall","percent":42,"label":"Data","current_bytes":104857600,"total_bytes":524288000,"bytes_per_second":20971520,"eta_seconds":20}
+{"event":"result","code":0}
 ```
 
-the request bytes are:
+Events:
 
-```text
-backup\0boot\0data\0--storage\0microsd\0\0
-```
+- `log`: ordinary recovery text.
+- `data`: structured payload, such as a screencap base64 object.
+- `progress`: progress update. v1 uses `phase:"overall"` for whole-command
+  progress and `phase:"item"` for the current partition/file. Backup/restore
+  may also include `label`, `current_bytes`, `total_bytes`,
+  `bytes_per_second`, `eta_seconds`, `current_files`, `total_files`,
+  `size_text`, and `file_text`.
+- `error`: structured error.
+- `result`: final result and process exit code.
 
-Rules:
-
-- Arguments are byte strings interpreted as UTF-8 by the current Rust client.
-- Arguments must not contain `NUL`.
-- Spaces are preserved because they are not delimiters.
-- The final empty `NUL` field is required.
-- The current engine reads at most 4096 bytes for a request.
-- The current Rust client rejects encoded requests larger than 4096 bytes.
-
-If the GUI reads an empty argv vector, it closes and recreates the FIFO pair
-without dispatching a command.
-
-## Response format
-
-The response is a byte stream:
-
-```text
-<command stdout/stderr-like text>\x04EXIT <code>\n
-```
-
-The command output is whatever the engine emits through `gui_print()` while the
-command runs. It may contain arbitrary text blocks, including structured blocks
-such as `FOX_LIST_BEGIN`/`FOX_LIST_END` and `FOX_STATUS_BEGIN`/`FOX_STATUS_END`.
-
-The end of response is marked by:
-
-```text
-\x04EXIT <code>\n
-```
-
-where `<code>` is a decimal shell-style exit code:
-
-- `0` means success.
-- non-zero means failure.
-- `2` is commonly used for command-line usage errors.
-
-The current client scans the stream for the sentinel byte sequence `\x04EXIT `,
-captures all preceding bytes as command output, parses the following line as an
-integer exit code, and exits with that code.
-
-## Busy behavior
-
-If recovery is already busy (`tw_busy != 0`) when a request arrives, the engine
-does not dispatch the command. It writes:
-
-```text
-Failed, operation in progress
-\x04EXIT 1
-```
-
-then closes and recreates the FIFO pair.
-
-Clients should treat this like any other command failure.
-
-## Client responsibilities
-
-A conforming client should:
-
-1. Encode argv with NUL delimiters and a trailing empty NUL field.
-2. Reject arguments containing NUL.
-3. Keep requests within the 4096-byte engine read limit.
-4. Open `/system/bin/foxin` for writing.
-5. Write the full request and close `foxin`.
-6. Open `/system/bin/foxout` for reading.
-7. Stream or capture bytes until the sentinel `\x04EXIT ` is found.
-8. Parse the following line as the exit code.
-9. Exit with that code.
-
-The Rust client retries opening `foxin` if it does not exist yet, printing a
-message that OrangeFox is not yet running.
-
-## Engine responsibilities
-
-A conforming engine should:
-
-1. Own FIFO creation and cleanup.
-2. Read exactly one request per FIFO lifecycle.
-3. Parse NUL-delimited argv until the first empty field.
-4. Reject or ignore empty argv.
-5. Open `foxout` before dispatching the command.
-6. Route command output to `foxout`.
-7. Dispatch the command on the recovery action thread.
-8. Always write `\x04EXIT <code>\n` before closing `foxout`.
-9. Recreate the FIFO pair after command completion, unless recovery is exiting
-   or the GUI has moved into a finished state.
-
-## Concurrency model
-
-Only one command may be active. There is no request ID, session ID, or framing
-inside `foxout`; therefore multiple clients writing concurrently are undefined.
-
-External callers should serialize invocations.
-
-## Progress lines
-
-While a long-running command (flash, backup, restore) executes, the engine
-mirrors its progress percentage into the response stream as standalone lines:
-
-```text
-FOX_PROGRESS\tpercent=<n>\n
-```
-
-where the prefix is the literal `FOX_PROGRESS` followed by a TAB (`0x09`), then
-one or more TAB-separated `key=value` fields. Each value is an integer or float
-in the range `0..=100`. Defined fields:
-
-- `percent` -- overall operation progress (the whole flash/backup/restore).
-- `item` -- the current item's own progress (the partition or file currently
-  being processed in a multi-partition backup/restore).
-
-A line may carry either or both fields, e.g. `FOX_PROGRESS\tpercent=42\titem=12`.
-
-Rules:
-
-- These lines are emitted in-band on `foxout`, interleaved with normal output.
-- The engine tracks each field independently and suppresses duplicate
-  consecutive values to avoid flooding the FIFO during a long operation.
-- They are only emitted while a fox command is active; the legacy ORS channel is
-  never affected.
-- A conforming client consumes and removes well-formed `FOX_PROGRESS` lines from
-  the displayed/captured output, using them to drive a progress indicator. A
-  malformed `FOX_PROGRESS` line (a field without `=`, an unparsable or
-  out-of-range number, or no recognized field) is left in the output as ordinary
-  text. A well-formed but unknown field is ignored as long as a known field is
-  present, so the prefix stays safe to extend.
-- When no explicit `item` value has been received for the current item, the
-  client may mirror `percent` onto it, so single-item flashes and item-less
-  restores still show a moving item bar.
-
-Engine side: `gui_fox_progress_begin()`/`gui_fox_progress_end()` bracket the
-command in `gui/gui.cpp`. `gui_fox_progress_overall()` (in `gui/console.cpp`) is
-invoked from `DataManager::_SetProgress` whenever the overall `ui_progress` value
-lands, and `gui_fox_progress_item()` is invoked from
-`ProgressTracking::UpdateDisplayDetails` with the current partition's own
-percentage.
+`foxcli` renders `log` events like ordinary stdout for human commands. `fox rpc`
+is the raw bridge mode: it reads a request JSON object from stdin and writes the
+NDJSON event stream to stdout unchanged.
 
 ## Cancellation
 
-Some operations (currently `backup`) can be aborted mid-flight. Because the
-request/response channel is single-command and the engine does not read `foxin`
-while a command runs, cancellation uses a dedicated out-of-band FIFO:
-
-- Cancel FIFO: `/system/bin/foxcancel` (`FOX_CANCEL_FILE` in `orscmd/orscmd.h`)
-
-The recovery GUI creates this FIFO and watches it from the event loop **at all
-times**, including while a command is running. To cancel, a client writes any
-byte to it; the engine invokes `PartitionManager.Cancel_Backup()`, which stops
-the running backup. The backup then ends normally through the response stream:
-the engine prints `Backup cancelled` and the exit sentinel with code `130`
-(`128 + SIGINT`, the shell convention for Ctrl+C).
-
-Client responsibilities:
-
-- A cancellable command is determined by the client (it knows what it sent).
-- The client installs a SIGINT handler so Ctrl+C records a cancel request instead
-  of terminating; on the first request it writes to the cancel FIFO and keeps
-  reading `foxout` until the exit sentinel arrives. A second Ctrl+C force-exits.
-- The cancel FIFO write end should be opened non-blocking so a missing reader
-  fails fast rather than hanging.
-- Non-cancellable commands (e.g. `flash`) leave the default SIGINT behavior in
-  place -- interrupting a flash can brick a device.
-
-The engine ignores cancel writes when no command is running.
-
-## Structured output blocks
-
-The FIFO protocol only frames request and response transport. Higher-level
-command output can define its own text blocks inside the response stream.
-
-Current examples include:
-
-- `FOX_STATUS_BEGIN` / `FOX_STATUS_END` for `fox status`
-- `FOX_LIST_BEGIN` / `FOX_LIST_END` for list-like command output
-
-Those blocks are command-level formats, not transport-level frames.
-
-## Compatibility notes
-
-- The FIFO paths are part of the protocol contract for the current recovery
-  image.
-- The sentinel must remain unlikely to appear in normal command output. Changing
-  it requires updating all clients.
-- The 4096-byte request limit comes from the current engine buffer and should be
-  treated as a hard compatibility limit.
-- The protocol preserves spaces in paths and passwords, unlike the legacy
-  ORS-style string command interface.
+`foxcancel` remains out-of-band. Write any byte to request cancellation of a
+cancellable running operation. The command still completes by emitting a final
+`result` event.

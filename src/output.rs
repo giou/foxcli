@@ -2,6 +2,7 @@ use std::env;
 use std::io::{self, IsTerminal, Write};
 
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::args::CommandPage;
 use crate::status::StatusSnapshot;
@@ -15,6 +16,12 @@ pub struct CommandResult<'a> {
     /// by the caller before the engine streams (see `sideload_notice`).
     pub json_note: Option<&'a str>,
     pub streamed: bool,
+    /// The engine's `list` data-event payload, when the command emitted one
+    /// (mount/backup/wipe/partition/addons/storages listings).
+    pub list: Option<&'a Value>,
+    /// A non-`list` status/info payload (`webserver`/`http`/`adb_devices`/…),
+    /// rendered generically as key:value (or per-item) rows.
+    pub status: Option<&'a Value>,
 }
 
 pub struct Renderer {
@@ -66,9 +73,9 @@ impl Renderer {
 
     pub fn command_response(&self, result: CommandResult<'_>) {
         if self.json {
-            // List commands emit a FOX_LIST block; surface it as a structured
-            // array rather than only as raw stdout text.
-            let partitions = parse_partition_rows(result.stdout);
+            // List commands emit a `list` data event; surface it as a structured
+            // array alongside the raw stdout text.
+            let partitions = partition_rows_from_data(result.list);
             print_json(&CommandJson {
                 ok: result.exit_code == 0,
                 exit_code: result.exit_code,
@@ -78,6 +85,7 @@ impl Renderer {
                 lines: result.stdout.lines().collect(),
                 progress_percent: result.progress_percent,
                 partitions,
+                data: result.status,
             });
         } else if !result.streamed {
             self.render_plain_command(result);
@@ -217,11 +225,10 @@ impl Renderer {
         self.command_page_sections(WLAN_COMMANDS);
     }
 
-    pub fn mtp_page(&self, exit_code: i32, stdout: &str) {
-        let enabled = stdout
-            .lines()
-            .find_map(|line| line.strip_prefix("mtp_enabled="))
-            .map(|value| value.trim() == "1");
+    pub fn mtp_page(&self, exit_code: i32, stdout: &str, data: Option<&Value>) {
+        let enabled = data
+            .and_then(|d| d.get("enabled"))
+            .and_then(Value::as_bool);
         let status = match enabled {
             Some(true) => "enabled",
             Some(false) => "disabled",
@@ -252,13 +259,19 @@ impl Renderer {
         self.command_page_sections(MTP_COMMANDS);
     }
 
-    pub fn command_page(&self, page: CommandPage, exit_code: i32, stdout: &str) {
+    pub fn command_page(
+        &self,
+        page: CommandPage,
+        exit_code: i32,
+        stdout: &str,
+        data: Option<&Value>,
+    ) {
         if matches!(page, CommandPage::Wlan) {
             self.wlan_page(exit_code, stdout);
             return;
         }
         if matches!(page, CommandPage::Mtp) {
-            self.mtp_page(exit_code, stdout);
+            self.mtp_page(exit_code, stdout, data);
             return;
         }
 
@@ -272,7 +285,7 @@ impl Renderer {
                 summary: page_summary(page),
                 stdout,
                 lines: stdout.lines().collect(),
-                partitions: parse_partition_rows(stdout),
+                partitions: partition_rows_from_data(data),
                 commands,
             });
             return;
@@ -283,7 +296,7 @@ impl Renderer {
         if exit_code != 0 && !stdout.trim().is_empty() {
             println!();
             println!("  {}", self.paint(Color::Yellow, stdout.trim()));
-        } else if let Some(rows) = parse_partition_rows(stdout) {
+        } else if let Some(rows) = partition_rows_from_data(data) {
             println!();
             if matches!(page, CommandPage::Addons) {
                 self.render_addons(&rows);
@@ -313,7 +326,7 @@ impl Renderer {
     }
 
     fn render_plain_command(&self, result: CommandResult<'_>) {
-        if let Some(rows) = parse_partition_rows(result.stdout) {
+        if let Some(rows) = partition_rows_from_data(result.list) {
             if result.command == "addons" {
                 self.render_addons(&rows);
             } else if result.command == "mount" {
@@ -331,8 +344,41 @@ impl Renderer {
             return;
         }
 
+        // Status/info objects (webserver/http/adb_devices/…) — generic render.
+        if let Some(obj) = result.status {
+            self.render_status_object(obj);
+            return;
+        }
+
         print!("{}", result.stdout);
         let _ = io::stdout().flush();
+    }
+
+    fn render_status_object(&self, obj: &Value) {
+        // `{ items: [...] }` → one line per item; otherwise flat key:value rows.
+        if let Some(items) = obj.get("items").and_then(Value::as_array) {
+            if items.is_empty() {
+                println!("  {}", self.paint(Color::Dim, "(none)"));
+                return;
+            }
+            for item in items {
+                if let Some(map) = item.as_object() {
+                    let cells: Vec<String> = map
+                        .iter()
+                        .filter_map(|(k, v)| scalar_text(v).map(|s| format!("{k}={s}")))
+                        .collect();
+                    println!("  {}", cells.join("  "));
+                }
+            }
+            return;
+        }
+        if let Some(map) = obj.as_object() {
+            for (key, value) in map {
+                if let Some(text) = scalar_text(value) {
+                    self.row(key, &text);
+                }
+            }
+        }
     }
 
     fn render_partition_table(&self, rows: &[PartitionRow], mode: TableMode) {
@@ -707,6 +753,32 @@ const COMMANDS: &[CommandInfo] = &[
         ],
     },
     CommandInfo {
+        group: "Connectivity",
+        name: "web",
+        usage: "fox web [enable|disable|status|password|webserver|adb]",
+        summary: "manage remote access: web server, ttyd, and network ADB",
+        examples: &[
+            "fox web enable",
+            "fox web password --generate",
+            "fox web webserver https enable",
+            "fox web adb pair",
+            "fox web adb list",
+        ],
+    },
+    CommandInfo {
+        group: "Connectivity",
+        name: "ota",
+        usage:
+            "fox ota [status|init|check|download|install|refresh] [--fox-id <id>] [--type <types>]",
+        summary: "check and test OrangeFox OTA updates",
+        examples: &[
+            "fox ota status",
+            "fox ota check",
+            "fox ota check --fox-id=test-id --type=alpha,beta,stable",
+            "fox ota download",
+        ],
+    },
+    CommandInfo {
         group: "Basic",
         name: "flash",
         usage: "fox flash <zip...> [--no-verify] [--reflash-orangefox]",
@@ -747,9 +819,16 @@ const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         group: "Misc",
+        name: "rpc",
+        usage: "fox rpc < request.json",
+        summary: "bridge one Fox RPC JSON request from stdin to NDJSON events on stdout",
+        examples: &[r#"printf '{"v":1,"op":"status","args":{}}' | fox rpc"#],
+    },
+    CommandInfo {
+        group: "Misc",
         name: "fifo",
-        usage: "fox fifo send <argv...>",
-        summary: "send a raw argv vector to foxin and print foxout",
+        usage: "fox fifo send <command parts...>",
+        summary: "debug legacy command flattening through the Fox RPC transport",
         examples: &[],
     },
     CommandInfo {
@@ -852,6 +931,18 @@ const WLAN_COMMANDS: &[CommandInfo] = &[
         usage: "fox wlan test",
         summary: "test connectivity",
         examples: &["fox wlan test"],
+    },
+    CommandInfo {
+        group: "WLAN",
+        name: "ap",
+        usage: "fox wlan ap <enable|disable|status|ssid <name>|password <pw>|list>",
+        summary: "create and manage a WiFi hotspot",
+        examples: &[
+            "fox wlan ap ssid MyHotspot",
+            "fox wlan ap password secret123",
+            "fox wlan ap enable",
+            "fox wlan ap list",
+        ],
     },
 ];
 
@@ -1160,8 +1251,8 @@ const STORAGES_COMMANDS: &[CommandInfo] = &[
 const FIFO_COMMANDS: &[CommandInfo] = &[CommandInfo {
     group: "FIFO",
     name: "send",
-    usage: "fox fifo send <argv...>",
-    summary: "send raw argv directly to foxin and print foxout",
+    usage: "fox fifo send <command parts...>",
+    summary: "debug foxcli command flattening through the Fox RPC FIFO transport",
     examples: &[
         "fox fifo send status",
         "fox fifo send mount /vendor",
@@ -1308,7 +1399,7 @@ fn page_summary(page: CommandPage) -> &'static str {
         CommandPage::Log => "Save recovery logs when you explicitly ask for it.",
         CommandPage::Reflash => "Reflash the currently installed OrangeFox when you explicitly ask for it.",
         CommandPage::Storages => "List storage destinations that can be used with backup --storage.",
-        CommandPage::Fifo => "Send a raw argv vector through foxin and stream foxout without typed foxcli parsing.",
+        CommandPage::Fifo => "Debug command flattening through the Fox RPC FIFO transport.",
         CommandPage::Internal => "Read or change recovery internals. This is mainly for scripts and debugging.",
         CommandPage::Ors => "Run an OpenRecoveryScript file through the recovery engine.",
         CommandPage::OrsCmd => "Run one raw OpenRecoveryScript command through the recovery engine.",
@@ -1357,6 +1448,10 @@ struct CommandJson<'a> {
     progress_percent: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     partitions: Option<Vec<PartitionRow>>,
+    /// Structured status/info payload for non-list commands, passed through
+    /// verbatim from the engine's `data` event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<&'a Value>,
 }
 
 #[derive(Serialize)]
@@ -1422,8 +1517,9 @@ impl<'a> WlanState<'a> {
     }
 }
 
-/// One record from a FOX_LIST block emitted by listing commands (mount, backup,
-/// wipe, partition, addons). `extra` carries fs/capability flags when present.
+/// One record from a `list` data event emitted by listing commands (mount,
+/// backup, wipe, partition, addons). `extra` carries fs/capability flags when
+/// present.
 #[derive(Serialize)]
 pub struct PartitionRow {
     pub mount_point: String,
@@ -1432,35 +1528,39 @@ pub struct PartitionRow {
     pub extra: String,
 }
 
-/// Parse a `FOX_LIST_BEGIN`/`FOX_LIST_END` block into rows. Returns `None` when
-/// no block is present (so callers fall back to raw output).
-fn parse_partition_rows(stdout: &str) -> Option<Vec<PartitionRow>> {
-    let mut in_block = false;
-    let mut rows = Vec::new();
-    for line in stdout.lines() {
-        match line {
-            "FOX_LIST_BEGIN" => {
-                in_block = true;
-                continue;
-            }
-            "FOX_LIST_END" => return Some(rows),
-            _ => {}
-        }
-        if !in_block {
-            continue;
-        }
-        let mut fields = line.splitn(4, '\t');
-        rows.push(PartitionRow {
-            mount_point: fields.next().unwrap_or("").to_string(),
-            display_name: fields.next().unwrap_or("").to_string(),
-            mounted: fields.next().unwrap_or("0") == "1",
-            extra: fields.next().unwrap_or("").to_string(),
-        });
-    }
-    if in_block {
-        Some(rows)
-    } else {
-        None
+/// Build rows from the engine's `list` data-event payload (`{ items: [...] }`).
+/// Returns `None` when the command emitted no list (callers fall back to raw
+/// output).
+fn partition_rows_from_data(list: Option<&Value>) -> Option<Vec<PartitionRow>> {
+    let items = list?.get("items")?.as_array()?;
+    Some(
+        items
+            .iter()
+            .map(|item| PartitionRow {
+                mount_point: field_str(item, "mount_point"),
+                display_name: field_str(item, "display_name"),
+                mounted: item.get("mounted").and_then(Value::as_bool).unwrap_or(false),
+                extra: field_str(item, "extra"),
+            })
+            .collect(),
+    )
+}
+
+fn field_str(item: &Value, key: &str) -> String {
+    item.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Render a scalar JSON value as display text (bools as yes/no); `None` for
+/// arrays/objects/null, which the caller skips.
+fn scalar_text(value: &Value) -> Option<String> {
+    match value {
+        Value::Bool(b) => Some(if *b { "yes" } else { "no" }.to_string()),
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
     }
 }
 
@@ -1486,10 +1586,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_fox_list_block() {
-        let s = "FOX_LIST_BEGIN\n/system\tSystem\t1\tfs=ext4,repair\n\
-                 /data\tData (2 GB)\t0\t\nFOX_LIST_END\n";
-        let rows = parse_partition_rows(s).expect("a list block");
+    fn builds_rows_from_list_data() {
+        let list = serde_json::json!({
+            "items": [
+                { "mount_point": "/system", "display_name": "System", "mounted": true, "extra": "fs=ext4,repair" },
+                { "mount_point": "/data", "display_name": "Data (2 GB)", "mounted": false, "extra": "" },
+            ]
+        });
+        let rows = partition_rows_from_data(Some(&list)).expect("a list payload");
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].mount_point, "/system");
         assert!(rows[0].mounted);
@@ -1499,7 +1603,8 @@ mod tests {
     }
 
     #[test]
-    fn no_block_returns_none() {
-        assert!(parse_partition_rows("just streamed text\n").is_none());
+    fn no_list_data_returns_none() {
+        assert!(partition_rows_from_data(None).is_none());
+        assert!(partition_rows_from_data(Some(&serde_json::json!({}))).is_none());
     }
 }
