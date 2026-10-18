@@ -834,7 +834,7 @@ const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         group: "Misc",
         name: "internal",
-        usage: "fox internal <get|set|go>",
+        usage: "fox internal <get|set|go|unlock>",
         summary: "read or update recovery internals",
         examples: &[],
     },
@@ -1281,6 +1281,13 @@ const INTERNAL_COMMANDS: &[CommandInfo] = &[
         usage: "fox internal go <page>",
         summary: "trigger a recovery GUI action/page",
         examples: &["fox internal go reboot"],
+    },
+    CommandInfo {
+        group: "Internal",
+        name: "unlock",
+        usage: "fox internal unlock",
+        summary: "dismiss the screen-off lock overlay and restore the display",
+        examples: &[],
     },
 ];
 

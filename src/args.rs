@@ -605,6 +605,9 @@ enum InternalCommand {
     Get(InternalGet),
     Set(InternalSet),
     Go(InternalGo),
+    /// Dismiss the screen-off lock overlay and restore the display.
+    /// Engine-side `internal unlock` (bootable/recovery fox_fifo).
+    Unlock,
 }
 
 #[derive(Args)]
@@ -750,6 +753,7 @@ fn internal_request(command: Option<InternalCommand>) -> Value {
             json!({ "action": "set", "name": s.var, "value": s.value })
         }
         Some(InternalCommand::Go(g)) => json!({ "action": "go", "page": g.page }),
+        Some(InternalCommand::Unlock) => json!({ "action": "unlock" }),
     }
 }
 
